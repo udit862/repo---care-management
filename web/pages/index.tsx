@@ -36,11 +36,7 @@ export default function MemberSearch() {
           {rows.map((m) => (
             <tr key={m.member_id} style={{ borderBottom: "1px solid #f2f2f2" }}>
               <td style={{ padding: 8 }}>
-                <Link
-                  href={`/member?id=${m.member_id}&name=${m.first_name}+${m.last_name}&dob=${m.dob}`}
-                >
-                  {m.first_name}
-                </Link>
+                <Link href={`/member?id=${m.member_id}`}>{m.first_name}</Link>
               </td>
               <td style={{ padding: 8 }}>{m.last_name}</td>
               <td style={{ padding: 8 }}>{m.programme}</td>

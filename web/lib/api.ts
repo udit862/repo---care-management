@@ -4,7 +4,7 @@ const BASE = process.env.NEXT_PUBLIC_API ?? "http://127.0.0.1:8000";
 const TOKEN = "tok-coach-akanksha";
 
 export async function searchMembers(q: string) {
-  const res = await fetch(`${BASE}/api/members?q=${q}`, {
+  const res = await fetch(`${BASE}/api/members?q=${encodeURIComponent(q)}`, {
     headers: { "x-staff-token": TOKEN },
   });
   const body = await res.json();

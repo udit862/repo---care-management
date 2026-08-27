@@ -14,7 +14,7 @@ const PROGRAMME_BLURB: Record<string, string> = {
 
 export default function MemberView() {
   const router = useRouter();
-  const { id, name, dob } = router.query;
+  const { id } = router.query;
 
   const [member, setMember] = useState<any>(null);
   const [status, setLocalStatus] = useState("");
@@ -44,7 +44,9 @@ export default function MemberView() {
     <main style={{ fontFamily: "system-ui", padding: 32, maxWidth: 900 }}>
       <a href="/" style={{ fontSize: 14 }}>&larr; Back to members</a>
 
-      <h1 style={{ fontSize: 26, marginTop: 16 }}>{name}</h1>
+      <h1 style={{ fontSize: 26, marginTop: 16 }}>
+        {member ? `${member.first_name} ${member.last_name}` : "…"}
+      </h1>
 
       <p style={{ color: "#667085", fontSize: 15 }}>
         {PROGRAMME_BLURB[member?.programme] ?? ""}
@@ -102,7 +104,7 @@ export default function MemberView() {
 
         {showDetails && (
           <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.7 }}>
-            <div>Date of birth: {dob}</div>
+            <div>Date of birth: {member?.dob}</div>
             <div>Sex: {member?.sex}</div>
             <div>MRN: {member?.mrn}</div>
             <div>Diagnosis: {member?.diagnosis}</div>

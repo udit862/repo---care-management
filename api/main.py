@@ -26,20 +26,33 @@ def _staff(token: str | None):
     return STAFF[token]
 
 
+# Allowlist of what the search screen renders — any field not named here
+# stays private by default, including fields added to data.py later.
+SEARCH_FIELDS = ("member_id", "first_name", "last_name", "programme", "coach", "status")
+
+
+def _summary(m: dict) -> dict:
+    return {k: m[k] for k in SEARCH_FIELDS}
+
+
 @app.get("/api/members")
 async def list_members(q: str = "", x_staff_token: str | None = Header(default=None)):
     """Search members by name or member id."""
     _staff(x_staff_token)
     needle = q.lower().strip()
     if not needle:
-        return {"results": MEMBERS}
+        return {"results": [_summary(m) for m in MEMBERS]}
+    tokens = needle.split()
     out = [
         m for m in MEMBERS
-        if needle in m["first_name"].lower()
-        or needle in m["last_name"].lower()
-        or needle in m["member_id"]
+        if all(
+            t in m["first_name"].lower()
+            or t in m["last_name"].lower()
+            or t in m["member_id"]
+            for t in tokens
+        )
     ]
-    return {"results": out}
+    return {"results": [_summary(m) for m in out]}
 
 
 @app.get("/api/members/{member_id}")
