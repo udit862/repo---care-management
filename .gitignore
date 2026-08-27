@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+
+
+# OS
+.DS_Store
+__MACOSX/
