@@ -1,5 +1,6 @@
 """Care management API — internal use only."""
 import logging
+from datetime import date
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,8 +79,10 @@ async def add_note(note: NoteIn, x_staff_token: str | None = Header(default=None
     staff = _staff(x_staff_token)
     for m in MEMBERS:
         if m["member_id"] == note.member_id:
-            m["notes"] = m["notes"] + "\n" + note.body
-            return {"ok": True}
+            stamped = f"{date.today().isoformat()} — {staff['name']}: {note.body}"
+            m["notes"] = m["notes"] + "\n" + stamped
+            logger.info("note added by=%s member_id=%s", staff["name"], note.member_id)
+            return m
     raise HTTPException(status_code=404, detail="not found")
 
 
@@ -91,11 +94,15 @@ class StatusIn(BaseModel):
 @app.post("/api/status")
 async def set_status(payload: StatusIn, x_staff_token: str | None = Header(default=None)):
     """Update outreach status."""
-    _staff(x_staff_token)
+    staff = _staff(x_staff_token)
     if payload.status not in ("ontrack", "attention", "overdue", "closed"):
         raise HTTPException(status_code=422, detail="bad status")
     for m in MEMBERS:
         if m["member_id"] == payload.member_id:
             m["status"] = payload.status
-            return {"ok": True}
+            logger.info(
+                "status change by=%s member_id=%s status=%s",
+                staff["name"], payload.member_id, payload.status,
+            )
+            return m
     raise HTTPException(status_code=404, detail="not found")

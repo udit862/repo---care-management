@@ -19,6 +19,7 @@ export default function MemberView() {
   const [member, setMember] = useState<any>(null);
   const [status, setLocalStatus] = useState("");
   const [note, setNote] = useState("");
+  const [error, setError] = useState("");
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
@@ -29,15 +30,29 @@ export default function MemberView() {
     });
   }, [id]);
 
-  const onStatusChange = (next: string) => {
+  const onStatusChange = async (next: string) => {
+    const prev = status;
     setLocalStatus(next);
-    setStatus(id as string, next);
+    setError("");
+    try {
+      await setStatus(id as string, next);
+    } catch {
+      setLocalStatus(prev);
+      setError("Status change didn't save — try again.");
+    }
   };
 
-  const onSaveNote = () => {
-    addNote(id as string, note);
-    setNote("");
-    alert("Note saved");
+  const onSaveNote = async () => {
+    const body = note.trim();
+    if (!body) return;
+    setError("");
+    try {
+      const updated = await addNote(id as string, body);
+      setMember(updated);
+      setNote("");
+    } catch {
+      setError("Note didn't save — your text is still below.");
+    }
   };
 
   return (
@@ -75,6 +90,9 @@ export default function MemberView() {
         <p style={{ fontSize: 14, color: "#667085" }}>
           Last contact: {member?.last_contact}
         </p>
+        {error && (
+          <p style={{ fontSize: 14, color: "#B42318" }}>{error}</p>
+        )}
       </section>
 
       <section style={{ marginTop: 24 }}>

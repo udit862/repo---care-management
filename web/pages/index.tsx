@@ -6,9 +6,18 @@ import StatusChip from "../components/StatusChip";
 export default function MemberSearch() {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<any[]>([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    searchMembers(q).then(setRows);
+    searchMembers(q)
+      .then((results) => {
+        setRows(results);
+        setError("");
+      })
+      .catch(() => {
+        setRows([]);
+        setError("Couldn't reach the server.");
+      });
   }, [q]);
 
   return (
@@ -21,6 +30,10 @@ export default function MemberSearch() {
         onChange={(e) => setQ(e.target.value)}
         style={{ padding: 8, width: 320, fontSize: 15, marginBottom: 20 }}
       />
+
+      {error && (
+        <p style={{ fontSize: 14, color: "#B42318" }}>{error}</p>
+      )}
 
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
