@@ -1,0 +1,321 @@
+diff --git a/api/main.py b/api/main.py
+index af0a111..e69fadc 100644
+--- a/api/main.py
++++ b/api/main.py
+@@ -1,5 +1,6 @@
+ """Care management API — internal use only."""
+ import logging
++from datetime import date
+ 
+ from fastapi import FastAPI, Header, HTTPException
+ from fastapi.middleware.cors import CORSMiddleware
+@@ -26,20 +27,33 @@ def _staff(token: str | None):
+     return STAFF[token]
+ 
+ 
++# Allowlist of what the search screen renders — any field not named here
++# stays private by default, including fields added to data.py later.
++SEARCH_FIELDS = ("member_id", "first_name", "last_name", "programme", "coach", "status")
++
++
++def _summary(m: dict) -> dict:
++    return {k: m[k] for k in SEARCH_FIELDS}
++
++
+ @app.get("/api/members")
+ async def list_members(q: str = "", x_staff_token: str | None = Header(default=None)):
+     """Search members by name or member id."""
+     _staff(x_staff_token)
+     needle = q.lower().strip()
+     if not needle:
+-        return {"results": MEMBERS}
++        return {"results": [_summary(m) for m in MEMBERS]}
++    tokens = needle.split()
+     out = [
+         m for m in MEMBERS
+-        if needle in m["first_name"].lower()
+-        or needle in m["last_name"].lower()
+-        or needle in m["member_id"]
++        if all(
++            t in m["first_name"].lower()
++            or t in m["last_name"].lower()
++            or t in m["member_id"]
++            for t in tokens
++        )
+     ]
+-    return {"results": out}
++    return {"results": [_summary(m) for m in out]}
+ 
+ 
+ @app.get("/api/members/{member_id}")
+@@ -65,8 +79,10 @@ async def add_note(note: NoteIn, x_staff_token: str | None = Header(default=None
+     staff = _staff(x_staff_token)
+     for m in MEMBERS:
+         if m["member_id"] == note.member_id:
+-            m["notes"] = m["notes"] + "\n" + note.body
+-            return {"ok": True}
++            stamped = f"{date.today().isoformat()} — {staff['name']}: {note.body}"
++            m["notes"] = m["notes"] + "\n" + stamped
++            logger.info("note added by=%s member_id=%s", staff["name"], note.member_id)
++            return m
+     raise HTTPException(status_code=404, detail="not found")
+ 
+ 
+@@ -78,11 +94,15 @@ class StatusIn(BaseModel):
+ @app.post("/api/status")
+ async def set_status(payload: StatusIn, x_staff_token: str | None = Header(default=None)):
+     """Update outreach status."""
+-    _staff(x_staff_token)
++    staff = _staff(x_staff_token)
+     if payload.status not in ("ontrack", "attention", "overdue", "closed"):
+         raise HTTPException(status_code=422, detail="bad status")
+     for m in MEMBERS:
+         if m["member_id"] == payload.member_id:
+             m["status"] = payload.status
+-            return {"ok": True}
++            logger.info(
++                "status change by=%s member_id=%s status=%s",
++                staff["name"], payload.member_id, payload.status,
++            )
++            return m
+     raise HTTPException(status_code=404, detail="not found")
+diff --git a/api/test_main.py b/api/test_main.py
+new file mode 100644
+index 0000000..522ca7b
+--- /dev/null
++++ b/api/test_main.py
+@@ -0,0 +1,39 @@
++"""Tests that pin the two riskiest behaviours of the members API."""
++from fastapi.testclient import TestClient
++
++from api.main import app
++
++client = TestClient(app)
++COACH = {"x-staff-token": "tok-coach-akanksha"}
++
++# Fields that must never leave the search endpoint — the care view
++# (/api/members/{id}) is the only place the full record belongs.
++CLINICAL_FIELDS = {
++    "mrn", "dob", "diagnosis", "allergies", "medications",
++    "prescriber", "insurance_member_number", "notes", "phone",
++    "email", "address", "last_pain_score", "last_pain_logged",
++}
++
++
++def test_search_requires_auth():
++    assert client.get("/api/members").status_code == 401
++
++
++def test_search_response_contains_no_clinical_fields():
++    """Would have caught F1: search returned full records, incl. on empty q."""
++    for q in ("", "vega"):
++        res = client.get("/api/members", params={"q": q}, headers=COACH)
++        assert res.status_code == 200
++        results = res.json()["results"]
++        assert results, f"expected results for q={q!r}"
++        for m in results:
++            leaked = CLINICAL_FIELDS & m.keys()
++            assert not leaked, f"search leaked clinical fields: {sorted(leaked)}"
++
++
++def test_full_name_search_finds_the_member():
++    """Would have caught F6: 'marisol vega' returned zero results."""
++    res = client.get("/api/members", params={"q": "marisol vega"}, headers=COACH)
++    assert res.status_code == 200
++    ids = [m["member_id"] for m in res.json()["results"]]
++    assert ids == ["88301"]
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+new file mode 100644
+index 0000000..72f7209
+--- /dev/null
++++ b/requirements-dev.txt
+@@ -0,0 +1,3 @@
++# Test-only dependencies — not needed to run the app.
++pytest
++httpx
+diff --git a/web/lib/api.ts b/web/lib/api.ts
+index 79fdf78..79f28da 100644
+--- a/web/lib/api.ts
++++ b/web/lib/api.ts
+@@ -3,33 +3,38 @@ const BASE = process.env.NEXT_PUBLIC_API ?? "http://127.0.0.1:8000";
+ // Staff token. In the real app this comes from the session.
+ const TOKEN = "tok-coach-akanksha";
+ 
+-export async function searchMembers(q: string) {
+-  const res = await fetch(`${BASE}/api/members?q=${q}`, {
+-    headers: { "x-staff-token": TOKEN },
++async function request(path: string, init?: RequestInit) {
++  const res = await fetch(`${BASE}${path}`, {
++    ...init,
++    headers: { "x-staff-token": TOKEN, ...(init?.headers ?? {}) },
+   });
+-  const body = await res.json();
++  if (!res.ok) {
++    throw new Error(`Request failed (${res.status})`);
++  }
++  return res.json();
++}
++
++export async function searchMembers(q: string) {
++  const body = await request(`/api/members?q=${encodeURIComponent(q)}`);
+   return body.results;
+ }
+ 
+ export async function getMember(memberId: string) {
+-  const res = await fetch(`${BASE}/api/members/${memberId}`, {
+-    headers: { "x-staff-token": TOKEN },
+-  });
+-  return res.json();
++  return request(`/api/members/${memberId}`);
+ }
+ 
+ export async function setStatus(memberId: string, status: string) {
+-  return fetch(`${BASE}/api/status`, {
++  return request(`/api/status`, {
+     method: "POST",
+-    headers: { "content-type": "application/json", "x-staff-token": TOKEN },
++    headers: { "content-type": "application/json" },
+     body: JSON.stringify({ member_id: memberId, status }),
+   });
+ }
+ 
+ export async function addNote(memberId: string, body: string) {
+-  return fetch(`${BASE}/api/notes`, {
++  return request(`/api/notes`, {
+     method: "POST",
+-    headers: { "content-type": "application/json", "x-staff-token": TOKEN },
++    headers: { "content-type": "application/json" },
+     body: JSON.stringify({ member_id: memberId, body }),
+   });
+ }
+diff --git a/web/pages/index.tsx b/web/pages/index.tsx
+index 72d7f35..2c33daa 100644
+--- a/web/pages/index.tsx
++++ b/web/pages/index.tsx
+@@ -6,9 +6,18 @@ import StatusChip from "../components/StatusChip";
+ export default function MemberSearch() {
+   const [q, setQ] = useState("");
+   const [rows, setRows] = useState<any[]>([]);
++  const [error, setError] = useState("");
+ 
+   useEffect(() => {
+-    searchMembers(q).then(setRows);
++    searchMembers(q)
++      .then((results) => {
++        setRows(results);
++        setError("");
++      })
++      .catch(() => {
++        setRows([]);
++        setError("Couldn't reach the server.");
++      });
+   }, [q]);
+ 
+   return (
+@@ -22,6 +31,10 @@ export default function MemberSearch() {
+         style={{ padding: 8, width: 320, fontSize: 15, marginBottom: 20 }}
+       />
+ 
++      {error && (
++        <p style={{ fontSize: 14, color: "#B42318" }}>{error}</p>
++      )}
++
+       <table style={{ width: "100%", borderCollapse: "collapse" }}>
+         <thead>
+           <tr style={{ textAlign: "left", borderBottom: "2px solid #eee" }}>
+@@ -36,11 +49,7 @@ export default function MemberSearch() {
+           {rows.map((m) => (
+             <tr key={m.member_id} style={{ borderBottom: "1px solid #f2f2f2" }}>
+               <td style={{ padding: 8 }}>
+-                <Link
+-                  href={`/member?id=${m.member_id}&name=${m.first_name}+${m.last_name}&dob=${m.dob}`}
+-                >
+-                  {m.first_name}
+-                </Link>
++                <Link href={`/member?id=${m.member_id}`}>{m.first_name}</Link>
+               </td>
+               <td style={{ padding: 8 }}>{m.last_name}</td>
+               <td style={{ padding: 8 }}>{m.programme}</td>
+diff --git a/web/pages/member.tsx b/web/pages/member.tsx
+index 05b963c..da0d7dd 100644
+--- a/web/pages/member.tsx
++++ b/web/pages/member.tsx
+@@ -14,11 +14,12 @@ const PROGRAMME_BLURB: Record<string, string> = {
+ 
+ export default function MemberView() {
+   const router = useRouter();
+-  const { id, name, dob } = router.query;
++  const { id } = router.query;
+ 
+   const [member, setMember] = useState<any>(null);
+   const [status, setLocalStatus] = useState("");
+   const [note, setNote] = useState("");
++  const [error, setError] = useState("");
+   const [showDetails, setShowDetails] = useState(false);
+ 
+   useEffect(() => {
+@@ -29,22 +30,38 @@ export default function MemberView() {
+     });
+   }, [id]);
+ 
+-  const onStatusChange = (next: string) => {
++  const onStatusChange = async (next: string) => {
++    const prev = status;
+     setLocalStatus(next);
+-    setStatus(id as string, next);
++    setError("");
++    try {
++      await setStatus(id as string, next);
++    } catch {
++      setLocalStatus(prev);
++      setError("Status change didn't save — try again.");
++    }
+   };
+ 
+-  const onSaveNote = () => {
+-    addNote(id as string, note);
+-    setNote("");
+-    alert("Note saved");
++  const onSaveNote = async () => {
++    const body = note.trim();
++    if (!body) return;
++    setError("");
++    try {
++      const updated = await addNote(id as string, body);
++      setMember(updated);
++      setNote("");
++    } catch {
++      setError("Note didn't save — your text is still below.");
++    }
+   };
+ 
+   return (
+     <main style={{ fontFamily: "system-ui", padding: 32, maxWidth: 900 }}>
+       <a href="/" style={{ fontSize: 14 }}>&larr; Back to members</a>
+ 
+-      <h1 style={{ fontSize: 26, marginTop: 16 }}>{name}</h1>
++      <h1 style={{ fontSize: 26, marginTop: 16 }}>
++        {member ? `${member.first_name} ${member.last_name}` : "…"}
++      </h1>
+ 
+       <p style={{ color: "#667085", fontSize: 15 }}>
+         {PROGRAMME_BLURB[member?.programme] ?? ""}
+@@ -73,6 +90,9 @@ export default function MemberView() {
+         <p style={{ fontSize: 14, color: "#667085" }}>
+           Last contact: {member?.last_contact}
+         </p>
++        {error && (
++          <p style={{ fontSize: 14, color: "#B42318" }}>{error}</p>
++        )}
+       </section>
+ 
+       <section style={{ marginTop: 24 }}>
+@@ -102,7 +122,7 @@ export default function MemberView() {
+ 
+         {showDetails && (
+           <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.7 }}>
+-            <div>Date of birth: {dob}</div>
++            <div>Date of birth: {member?.dob}</div>
+             <div>Sex: {member?.sex}</div>
+             <div>MRN: {member?.mrn}</div>
+             <div>Diagnosis: {member?.diagnosis}</div>
